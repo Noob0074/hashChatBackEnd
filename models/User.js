@@ -70,8 +70,14 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Index for email (sparse — only indexes documents where email exists)
-userSchema.index({ email: 1, isDeleted: 1 }, { unique: true, sparse: true });
+// Index for email (partial — only indexes documents where email is a string to allow multiple guests with no email)
+userSchema.index(
+  { email: 1, isDeleted: 1 },
+  { 
+    unique: true, 
+    partialFilterExpression: { email: { $type: "string" } } 
+  }
+);
 userSchema.index({ username: 1, isDeleted: 1 }, { unique: true });
 userSchema.index({ isDeleted: 1 });
 userSchema.index({ isGuest: 1, lastActive: 1 }); // For guest cleanup worker
