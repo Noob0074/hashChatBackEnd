@@ -9,9 +9,9 @@ import rateLimit from "express-rate-limit";
 
 // Config
 const envStatus = dotenv.config();
-if (envStatus.error) {
-  console.error("❌ Failed to load .env file:", envStatus.error);
-} else {
+if (envStatus.error && !process.env.MONGO_URI) {
+  console.log("⚠️ No .env file found. Relying on system environment variables.");
+} else if (!envStatus.error) {
   console.log("✅ .env configuration loaded successfully");
 }
 
