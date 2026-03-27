@@ -15,6 +15,10 @@ import { sendVerificationEmail, sendPasswordResetEmail } from "../utils/email.js
 
 const GUEST_LIMIT = parseInt(process.env.DAILY_LIMIT_GUESTS) || 3;
 const ROOM_LIMIT = parseInt(process.env.DAILY_LIMIT_ROOMS) || 5;
+const MAX_RESET_ATTEMPTS = parseInt(process.env.AUTH_MAX_RESET_ATTEMPTS) || 3;
+const RESET_LOCK_MINS = parseInt(process.env.AUTH_RESET_LOCK_MINS) || 60;
+const MAX_VERIFY_RESENDS = parseInt(process.env.AUTH_MAX_VERIFY_RESENDS) || 3;
+const VERIFY_RESEND_LOCK_MINS = parseInt(process.env.AUTH_VERIFY_RESEND_LOCK_MINS) || 30;
 
 // Helper: generate JWT
 const generateToken = (userId) => {
@@ -330,6 +334,16 @@ export const resendVerification = async (req, res) => {
       return res.status(400).json({ error: "Email already verified" });
     }
 
+    // Rate limit by userId
+    const resendKey = `${user._id}_resend_verification`;
+    const isLimited = await checkLimit(resendKey, "resend_verification", MAX_VERIFY_RESENDS);
+    if (isLimited) {
+      return res.status(429).json({
+        error: `Too many resend requests. Try again in ${VERIFY_RESEND_LOCK_MINS} minutes.`,
+      });
+    }
+    await incrementLimit(resendKey, "resend_verification", VERIFY_RESEND_LOCK_MINS);
+
     // Create new token
     const verifyToken = crypto.randomBytes(32).toString("hex");
     
@@ -401,11 +415,26 @@ export const forgotPassword = async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email is required" });
 
+    // Rate limit by IP
+    const ip = req.ip || req.connection.remoteAddress;
+    const ipHashed = hashIP(ip);
+    const resetRateKey = `${ipHashed}_reset`;
+
+    const isLimited = await checkLimit(resetRateKey, "forgot_password", MAX_RESET_ATTEMPTS);
+    if (isLimited) {
+      return res.status(429).json({
+        error: `Too many reset requests. Try again in ${RESET_LOCK_MINS} minutes.`,
+      });
+    }
+
     const user = await User.findOne({ 
       email: sanitize(email.trim().toLowerCase()),
       isGuest: false,
       isDeleted: false 
     });
+
+    // Always increment the counter regardless of whether email exists (prevent enumeration via timing)
+    await incrementLimit(resetRateKey, "forgot_password", RESET_LOCK_MINS);
 
     // Security: Don't reveal if user exists or not
     if (!user) {
