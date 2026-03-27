@@ -1,0 +1,6 @@
+# Root gitignore
+node_modules/
+.env
+
+# MacOS
+.DS_Store
