@@ -1,19 +1,13 @@
+import "./config/env.js";
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 
-// Config
-const envStatus = dotenv.config();
-if (envStatus.error && !process.env.MONGO_URI) {
-  console.log("⚠️ No .env file found. Relying on system environment variables.");
-} else if (!envStatus.error) {
-  console.log("✅ .env configuration loaded successfully");
-}
+// Environment variables are loaded by config/env.js (imported above)
 
 // Fail-fast if critical environment variables are missing
 const CRITICAL_VARS = ["MONGO_URI", "JWT_SECRET"];
@@ -38,6 +32,7 @@ import configRoutes from "./routes/config.js";
 
 // Initialize Express
 const app = express();
+app.set("trust proxy", 1); // Trust first proxy (e.g., Render, Vercel, Cloudflare)
 const server = http.createServer(app);
 
 // Initialize Socket.IO
@@ -47,6 +42,9 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+
+// Initialize socket handlers
+initSocket(io);
 
 // ========================
 // MIDDLEWARE
@@ -119,11 +117,6 @@ app.use((err, req, res, next) => {
   console.error("❌ Server error:", err);
   res.status(500).json({ error: "Internal server error" });
 });
-
-// ========================
-// INITIALIZE SOCKET.IO
-// ========================
-initSocket(io);
 
 // ========================
 // START SERVER

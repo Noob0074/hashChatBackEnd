@@ -67,6 +67,9 @@ const userSchema = new mongoose.Schema(
 );
 
 // Index for email (sparse — only indexes documents where email exists)
-userSchema.index({ email: 1 }, { unique: true, sparse: true });
+userSchema.index({ email: 1, isDeleted: 1 }, { unique: true, sparse: true });
+userSchema.index({ username: 1, isDeleted: 1 }, { unique: true });
+userSchema.index({ isDeleted: 1 });
+userSchema.index({ isGuest: 1, lastActive: 1 }); // For guest cleanup worker
 
 export default mongoose.model("User", userSchema);

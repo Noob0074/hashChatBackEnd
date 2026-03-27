@@ -114,15 +114,18 @@ export const sendMessage = async (req, res) => {
       return res.status(403).json({ error: "Not a member of this room" });
     }
 
-    // For DM rooms, check if the other user is deleted
+    // For DM rooms, check if the other user is deleted or has blocked sender
     if (room.type === "dm") {
       const otherUserId = room.members.find(
         (m) => m.toString() !== req.userId.toString()
       );
       if (otherUserId) {
-        const otherUser = await User.findById(otherUserId);
+        const otherUser = await User.findById(otherUserId).select("isDeleted blockedUsers");
         if (otherUser && otherUser.isDeleted) {
           return res.status(400).json({ error: "This user is no longer available" });
+        }
+        if (otherUser?.blockedUsers?.some(id => id.toString() === req.userId.toString())) {
+          return res.status(403).json({ error: "You have been blocked by this user" });
         }
       }
     }

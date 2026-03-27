@@ -26,7 +26,7 @@ export const sendVerificationEmail = async (email, token) => {
       resend = new Resend(process.env.RESEND_API_KEY);
     }
 
-    await resend.emails.send({
+    const { data, error: resendError } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev",
       to: email,
       subject: "Verify your HashChat account",
@@ -55,10 +55,15 @@ export const sendVerificationEmail = async (email, token) => {
       `,
     });
 
-    console.log(`✅ Verification email sent to ${email}`);
+    if (resendError) {
+      console.error(`❌ Resend Error [Verification]:`, resendError);
+      return false;
+    }
+
+    console.log(`✅ Verification email sent to ${email} (ID: ${data.id})`);
     return true;
   } catch (error) {
-    console.error(`❌ Failed to send email to ${email}:`, error);
+    console.error(`❌ Unexpected Failure sending verification email to ${email}:`, error);
     return false;
   }
 };
@@ -85,7 +90,7 @@ export const sendPasswordResetEmail = async (email, token) => {
       resend = new Resend(process.env.RESEND_API_KEY);
     }
 
-    await resend.emails.send({
+    const { data, error: resendError } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev",
       to: email,
       subject: "Reset your HashChat password",
@@ -113,10 +118,15 @@ export const sendPasswordResetEmail = async (email, token) => {
       `,
     });
 
-    console.log(`✅ Password reset email sent to ${email}`);
+    if (resendError) {
+      console.error(`❌ Resend Error [Password Reset]:`, resendError);
+      return false;
+    }
+
+    console.log(`✅ Password reset email sent to ${email} (ID: ${data.id})`);
     return true;
   } catch (error) {
-    console.error(`❌ Failed to send reset email to ${email}:`, error);
+    console.error(`❌ Unexpected Failure sending reset email to ${email}:`, error);
     return false;
   }
 };

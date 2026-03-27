@@ -47,7 +47,13 @@ export const createGuest = async (req, res) => {
   try {
     const ip = req.ip || req.connection.remoteAddress;
     const ipHashed = hashIP(ip);
-    const fingerprint = req.body.fingerprint || req.headers["user-agent"] || "unknown";
+    
+    // Use user-agent as a fallback or secondary factor if fingerprint is missing or generic
+    const clientFingerprint = req.body.fingerprint;
+    const userAgent = req.headers["user-agent"] || "unknown";
+    const fingerprint = (clientFingerprint && clientFingerprint !== "default") 
+      ? `${clientFingerprint}_${userAgent}` 
+      : userAgent;
 
     // Check for active bans
     const ban = await Ban.findOne({

@@ -1,4 +1,6 @@
 import Message from "../models/Message.js";
+import User from "../models/User.js";
+import Room from "../models/Room.js";
 import cloudinary from "../config/cloudinary.js";
 
 /**
@@ -55,15 +57,65 @@ const cleanupExpiredMedia = async () => {
 };
 
 /**
+ * Cleanup Old Accounts
+ * Deletes guest accounts inactive for 30+ days and soft-deleted users.
+ */
+const cleanupOldAccounts = async () => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    console.log(`🧹 Running account cleanup (threshold: ${thirtyDaysAgo.toISOString()})...`);
+
+    // 1. Find inactive guests
+    const inactiveGuests = await User.find({
+      isGuest: true,
+      lastActive: { $lt: thirtyDaysAgo }
+    });
+
+    // 2. Find long-term soft-deleted users
+    const oldDeletedUsers = await User.find({
+      isDeleted: true,
+      updatedAt: { $lt: thirtyDaysAgo }
+    });
+
+    const targetUsers = [...inactiveGuests, ...oldDeletedUsers];
+
+    if (targetUsers.length === 0) {
+      console.log("✨ No old accounts to purge.");
+      return;
+    }
+
+    for (const user of targetUsers) {
+      console.log(`   🗑️ Purging user: ${user.username} (${user._id})`);
+      
+      // Clean up rooms created by this user
+      await Room.deleteMany({ createdBy: user._id });
+      // Remove from all other rooms
+      await Room.updateMany(
+        { members: user._id },
+        { $pull: { members: user._id, pendingRequests: user._id } }
+      );
+      // Delete user
+      await User.findByIdAndDelete(user._id);
+    }
+
+    console.log(`✅ Account cleanup completed (${targetUsers.length} purged).`);
+  } catch (error) {
+    console.error("❌ Account cleanup error:", error);
+  }
+};
+
+/**
  * Start the cleanup worker on a schedule
  * Runs once immediately, then every 6 hours
  */
 export const startCleanupWorker = () => {
   // Run immediately on start
   cleanupExpiredMedia();
+  cleanupOldAccounts();
 
-  // Schedule to run every 6 hours (21600000 ms)
-  setInterval(cleanupExpiredMedia, 6 * 60 * 60 * 1000);
+  // Schedule to run periodically
+  setInterval(cleanupExpiredMedia, 6 * 60 * 60 * 1000); // 6h
+  setInterval(cleanupOldAccounts, 24 * 60 * 60 * 1000); // 24h
   
-  console.log("🚀 Media cleanup worker initialized (6h interval).");
+  console.log("🚀 Maintenance workers initialized (Media: 6h, Accounts: 24h).");
 };

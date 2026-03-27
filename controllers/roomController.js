@@ -78,9 +78,20 @@ export const createDM = async (req, res) => {
     }
 
     // Check target user exists and is not deleted
-    const targetUser = await User.findById(targetUserId);
+    const targetUser = await User.findById(targetUserId).select("isDeleted blockedUsers");
     if (!targetUser || targetUser.isDeleted) {
       return res.status(404).json({ error: "User not found" });
+    }
+
+    // Block check: prevent DM if target has blocked the requester
+    if (targetUser.blockedUsers?.some(id => id.toString() === req.userId.toString())) {
+      return res.status(403).json({ error: "Cannot send a message to this user" });
+    }
+
+    // Block check: prevent DM if requester has blocked the target
+    const currentUser = await User.findById(req.userId).select("blockedUsers");
+    if (currentUser?.blockedUsers?.some(id => id.toString() === targetUserId.toString())) {
+      return res.status(403).json({ error: "You have blocked this user. Unblock them first." });
     }
 
     // Check if DM room already exists
@@ -151,17 +162,17 @@ export const joinRoom = async (req, res) => {
     }
 
     // Check if banned
-    if (room.bannedUsers.includes(userId)) {
+    if (room.bannedUsers.some(id => id.toString() === userId.toString())) {
       return res.status(403).json({ error: "You are banned from this room" });
     }
 
     // Check if already a member
-    if (room.members.includes(userId)) {
+    if (room.members.some(id => id.toString() === userId.toString())) {
       return res.status(400).json({ error: "Already a member of this room" });
     }
 
     // Check if already pending
-    if (room.pendingRequests.includes(userId)) {
+    if (room.pendingRequests.some(id => id.toString() === userId.toString())) {
       return res.status(400).json({ error: "Join request already pending" });
     }
 
@@ -359,7 +370,7 @@ export const approveRequest = async (req, res) => {
     }
 
     // Check if user is in pending
-    if (!room.pendingRequests.includes(targetUserId)) {
+    if (!room.pendingRequests.some(id => id.toString() === targetUserId.toString())) {
       return res.status(400).json({ error: "No pending request from this user" });
     }
 
@@ -535,7 +546,7 @@ export const deleteRoom = async (req, res) => {
       return res.status(403).json({ error: "Not authorized" });
     }
 
-    if (room.type === "dm" && !room.members.includes(req.userId)) {
+    if (room.type === "dm" && !room.members.some(id => id.toString() === req.userId.toString())) {
       return res.status(403).json({ error: "Not a member of this DM" });
     }
 
@@ -579,7 +590,7 @@ export const hideRoom = async (req, res) => {
     }
 
     // Only members can hide a room
-    if (!room.members.includes(req.userId)) {
+    if (!room.members.some(id => id.toString() === req.userId.toString())) {
       return res.status(403).json({ error: "Not a member of this room" });
     }
 
