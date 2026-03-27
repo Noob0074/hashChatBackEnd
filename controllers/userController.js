@@ -20,8 +20,11 @@ export const searchUsers = async (req, res) => {
       return res.status(400).json({ error: "Search query must be at least 2 characters" });
     }
 
+    // Escape regex special chars to prevent ReDoS
+    const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     const users = await User.find({
-      username: { $regex: username, $options: "i" },
+      username: { $regex: escapedUsername, $options: "i" },
       isDeleted: false,
       _id: { $ne: req.userId }, // Exclude self
     })

@@ -6,6 +6,8 @@ import sanitize from "../utils/sanitize.js";
 
 // In-memory store: userId → Set of socketIds
 const onlineUsers = new Map();
+// Message rate limiting: userId → lastMessageTimestamps[]
+const messageTimestamps = new Map();
 let ioInstance;
 
 /**
@@ -114,6 +116,18 @@ const initSocket = (io) => {
         if (!roomId || !content) {
           return socket.emit("error", { message: "Room ID and content required" });
         }
+
+        // Rate limit: 5 messages per 2 seconds
+        const now = Date.now();
+        const timestamps = messageTimestamps.get(userId) || [];
+        const recentTimestamps = timestamps.filter(t => now - t < 2000);
+        
+        if (recentTimestamps.length >= 5) {
+          return socket.emit("error", { message: "Message limit reached. Slow down." });
+        }
+        
+        recentTimestamps.push(now);
+        messageTimestamps.set(userId, recentTimestamps);
 
         // Sanitize content
         const sanitizedContent = type === "text" ? sanitize(content) : content;
@@ -299,6 +313,7 @@ const initSocket = (io) => {
 
         if (userSockets.size === 0) {
           onlineUsers.delete(userId);
+          messageTimestamps.delete(userId);
           // Broadcast offline status
           io.emit("user_offline", { userId, username });
         }

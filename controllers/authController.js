@@ -15,6 +15,7 @@ import { sendVerificationEmail, sendPasswordResetEmail } from "../utils/email.js
 
 const GUEST_LIMIT = parseInt(process.env.DAILY_LIMIT_GUESTS) || 3;
 const ROOM_LIMIT = parseInt(process.env.DAILY_LIMIT_ROOMS) || 5;
+const REGISTER_LIMIT = parseInt(process.env.DAILY_LIMIT_REGISTER) || 5;
 const MAX_RESET_ATTEMPTS = parseInt(process.env.AUTH_MAX_RESET_ATTEMPTS) || 3;
 const RESET_LOCK_MINS = parseInt(process.env.AUTH_RESET_LOCK_MINS) || 60;
 const MAX_VERIFY_RESENDS = parseInt(process.env.AUTH_MAX_VERIFY_RESENDS) || 3;
@@ -58,7 +59,7 @@ export const createGuest = async (req, res) => {
       return res.status(403).json({ error: "You are temporarily banned. Try again later." });
     }
 
-    // Rate limit: using configurable limit
+    // Rate limit: checkAndIncrement already increments — don't call incrementLimit again
     const limitKey = `${ipHashed}_${fingerprint}`;
     const isLimited = await checkAndIncrement(limitKey, "create_account", GUEST_LIMIT);
 
@@ -84,9 +85,6 @@ export const createGuest = async (req, res) => {
       ipHash: ipHashed,
       fingerprint,
     });
-
-    // Increment rate limit
-    await incrementLimit(limitKey, "create_account");
 
     // Generate JWT
     const token = generateToken(user._id);
@@ -121,6 +119,14 @@ export const register = async (req, res) => {
 
     if (!username || !email || !password) {
       return res.status(400).json({ error: "Username, email, and password are required" });
+    }
+
+    // Rate limit registrations per IP (skip for guest upgrades already authenticated)
+    if (!req.user?.isGuest) {
+      const isLimited = await checkAndIncrement(ipHashed, "register", REGISTER_LIMIT);
+      if (isLimited) {
+        return res.status(429).json({ error: `Too many registrations from this IP. Try again later.` });
+      }
     }
 
     username = sanitize(username.trim());
@@ -305,7 +311,11 @@ export const verifyEmail = async (req, res) => {
     const { token } = req.query;
     if (!token) return res.status(400).json({ error: "Token is required" });
 
-    const verificationRecord = await Verification.findOne({ token });
+    // Explicitly check expiry (TTL index can lag up to 60 seconds)
+    const verificationRecord = await Verification.findOne({ 
+      token,
+      expiresAt: { $gt: new Date() }
+    });
     if (!verificationRecord) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
@@ -475,11 +485,16 @@ export const resetPassword = async (req, res) => {
       return res.status(400).json({ error: "Token and password are required" });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    // Enforce full password strength (same as registration)
+    const passRegex = new RegExp(process.env.AUTH_PASSWORD_REGEX || "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$");
+    if (!passRegex.test(password)) {
+      return res.status(400).json({
+        error: "Password must be at least 8 characters and include uppercase, lowercase, number, and special character"
+      });
     }
 
-    const resetDoc = await PasswordReset.findOne({ token });
+    // Explicitly check expiry (TTL index can lag up to 60 seconds)
+    const resetDoc = await PasswordReset.findOne({ token, expiresAt: { $gt: new Date() } });
     if (!resetDoc) {
       return res.status(400).json({ error: "Invalid or expired reset token" });
     }

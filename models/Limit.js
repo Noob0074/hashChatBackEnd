@@ -9,7 +9,7 @@ const limitSchema = new mongoose.Schema(
 
     action: {
       type: String,
-      enum: ["create_account", "create_room", "upload_media", "upload_avatar", "update_avatar", "failed_login"],
+      enum: ["create_account", "create_room", "upload_media", "upload_avatar", "update_avatar", "failed_login", "forgot_password", "resend_verification", "register", "create_dm", "join_room"],
       required: true,
     },
 

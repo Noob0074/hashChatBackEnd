@@ -66,6 +66,13 @@ export const createDM = async (req, res) => {
   try {
     const { targetUserId } = req.body;
 
+    // Rate limit: 20 DMs per day (customizable via DAILY_LIMIT_DM)
+    const dmLimit = parseInt(process.env.DAILY_LIMIT_DM) || 20;
+    const isLimited = await checkAndIncrement(req.userId.toString(), "create_dm", dmLimit);
+    if (isLimited) {
+      return res.status(429).json({ error: `Daily DM limit reached (${dmLimit}). Try again later.` });
+    }
+
     if (!targetUserId) {
       return res.status(400).json({ error: "Target user ID required" });
     }
@@ -128,6 +135,13 @@ export const joinRoom = async (req, res) => {
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ error: "Room not found" });
+    }
+
+    // Rate limit: 20 join attempts/requests per day
+    const joinLimit = parseInt(process.env.DAILY_LIMIT_JOIN) || 20;
+    const isLimited = await checkAndIncrement(req.userId.toString(), "join_room", joinLimit);
+    if (isLimited) {
+      return res.status(429).json({ error: `Daily join limit reached. Try again later.` });
     }
 
     // Check if banned
@@ -267,6 +281,13 @@ export const getRoomDetails = async (req, res) => {
       return res.status(404).json({ error: "Room not found" });
     }
 
+    // Only members or the room creator can view details
+    const isMember = room.members.some((m) => m._id.toString() === req.userId.toString());
+    const isCreator = room.createdBy._id?.toString() === req.userId.toString();
+    if (!isMember && !isCreator) {
+      return res.status(403).json({ error: "Not authorized to view this room" });
+    }
+
     res.json({ room });
   } catch (error) {
     console.error("Get room details error:", error);
@@ -286,8 +307,11 @@ export const searchRooms = async (req, res) => {
       return res.status(400).json({ error: "Search must be at least 2 characters" });
     }
 
+    // Escape regex special chars to prevent ReDoS
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     const rooms = await Room.find({
-      name: { $regex: name, $options: "i" },
+      name: { $regex: escapedName, $options: "i" },
       type: { $in: ["public", "private"] },
     })
       .select("name type members createdBy")
@@ -540,6 +564,11 @@ export const hideRoom = async (req, res) => {
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ error: "Room not found" });
+    }
+
+    // Only members can hide a room
+    if (!room.members.includes(req.userId)) {
+      return res.status(403).json({ error: "Not a member of this room" });
     }
 
     await Room.findByIdAndUpdate(roomId, {

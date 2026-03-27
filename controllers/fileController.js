@@ -64,8 +64,7 @@ export const getUploadUrl = async (req, res) => {
       ip: req.ip
     });
     res.status(500).json({ 
-      error: "Failed to generate upload URL", 
-      details: error.message 
+      error: "Failed to generate upload URL"
     });
   }
 };
