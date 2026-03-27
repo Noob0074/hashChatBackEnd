@@ -129,12 +129,18 @@ export const createDM = async (req, res) => {
  */
 export const joinRoom = async (req, res) => {
   try {
-    const { roomId } = req.params;
+    const roomId = req.params.roomId;
     const userId = req.userId;
 
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ error: "Room not found" });
+    }
+
+    // Check membership limit
+    const maxMembers = parseInt(process.env.MAX_ROOM_MEMBERS) || 100;
+    if (room.members.length >= maxMembers) {
+      return res.status(400).json({ error: `Room is full (max ${maxMembers} members)` });
     }
 
     // Rate limit: 20 join attempts/requests per day
@@ -344,6 +350,12 @@ export const approveRequest = async (req, res) => {
     // Check admin
     if (room.createdBy.toString() !== req.userId.toString()) {
       return res.status(403).json({ error: "Not authorized" });
+    }
+
+    // Check membership limit
+    const maxMembers = parseInt(process.env.MAX_ROOM_MEMBERS) || 100;
+    if (room.members.length >= maxMembers) {
+      return res.status(400).json({ error: `Room is full (max ${maxMembers} members)` });
     }
 
     // Check if user is in pending

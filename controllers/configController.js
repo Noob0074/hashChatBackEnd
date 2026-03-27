@@ -18,6 +18,7 @@ export const getPublicConfig = async (req, res) => {
         mediaSize: parseInt(process.env.LIMIT_MEDIA_SIZE) || 20971520, // 20MB
         avatarTypes: (process.env.ALLOWED_AVATAR_TYPES || "image/jpeg,image/png").split(","),
         mediaTypes: (process.env.ALLOWED_MEDIA_TYPES || "image/jpeg,image/png,image/gif,application/pdf").split(","),
+        maxMembers: parseInt(process.env.MAX_ROOM_MEMBERS) || 100,
       },
       // App info
       app: {
