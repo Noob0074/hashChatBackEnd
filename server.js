@@ -15,6 +15,15 @@ if (envStatus.error && !process.env.MONGO_URI) {
   console.log("✅ .env configuration loaded successfully");
 }
 
+// Fail-fast if critical environment variables are missing
+const CRITICAL_VARS = ["MONGO_URI", "JWT_SECRET"];
+CRITICAL_VARS.forEach((v) => {
+  if (!process.env[v]) {
+    console.error(`❌ CRITICAL ERROR: Missing required environment variable: ${v}`);
+    process.exit(1);
+  }
+});
+
 import connectDB from "./config/db.js";
 import { startCleanupWorker } from "./utils/cleanup.js";
 import initSocket from "./socket/index.js";

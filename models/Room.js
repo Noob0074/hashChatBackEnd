@@ -83,4 +83,9 @@ const roomSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Performance indices for room queries
+roomSchema.index({ members: 1 });
+roomSchema.index({ createdBy: 1 });
+roomSchema.index({ type: 1, name: 1 });
+
 export default mongoose.model("Room", roomSchema);

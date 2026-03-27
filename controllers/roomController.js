@@ -658,6 +658,13 @@ export const updateRoom = async (req, res) => {
     const updates = {};
     if (name) {
       name = sanitize(name.trim());
+      
+      // Strict Alpha-only Room Name check
+      const roomRegex = new RegExp(process.env.AUTH_ROOMNAME_REGEX || "^[a-zA-Z]+$");
+      if (!roomRegex.test(name)) {
+        return res.status(400).json({ error: "Room name must contain only alphabets" });
+      }
+
       if (name.length < 2 || name.length > 50) {
         return res.status(400).json({ error: "Room name must be 2-50 characters" });
       }
