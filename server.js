@@ -4,6 +4,7 @@ import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import helmet from "helmet";
+import { instrument } from "@socket.io/admin-ui";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 
@@ -38,9 +39,24 @@ const server = http.createServer(app);
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: [
+      process.env.FRONTEND_URL || "http://localhost:5173",
+      "https://admin.socket.io"
+    ],
     credentials: true,
   },
+});
+
+// Instrument Socket.IO Admin UI (MUST be before initSocket to register /admin namespace first)
+import bcrypt from "bcryptjs";
+const hashedPassword = bcrypt.hashSync(process.env.SOCKET_ADMIN_PASSWORD || "admin123", 10);
+instrument(io, {
+  auth: {
+    type: "basic",
+    username: process.env.SOCKET_ADMIN_USERNAME || "admin",
+    password: hashedPassword,
+  },
+  mode: "development",
 });
 
 // Initialize socket handlers
@@ -130,7 +146,7 @@ const startServer = async () => {
 
     // Start media cleanup worker
     startCleanupWorker();
-    
+
     // Start server
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`

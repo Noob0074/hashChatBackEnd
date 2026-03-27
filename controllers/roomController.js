@@ -4,6 +4,7 @@ import User from "../models/User.js";
 import sanitize from "../utils/sanitize.js";
 import { checkLimit, incrementLimit, checkAndIncrement } from "../utils/rateLimiter.js";
 import { getIo, getUserSockets } from "../socket/index.js";
+import { deleteFile } from "./fileController.js";
 
 const ROOM_LIMIT = parseInt(process.env.DAILY_LIMIT_ROOMS) || 5;
 
@@ -45,8 +46,6 @@ export const createRoom = async (req, res) => {
       members: [req.userId],
       accessLedger: [{ userId: req.userId, joinedAt: Date.now() }],
     });
-
-    await incrementLimit(req.userId.toString(), "create_room");
 
     res.status(201).json({ room });
   } catch (error) {
@@ -550,6 +549,11 @@ export const deleteRoom = async (req, res) => {
       return res.status(403).json({ error: "Not a member of this DM" });
     }
 
+    // Cleanup room avatar from Cloudinary
+    if (room.roomPicPublicId) {
+      deleteFile(room.roomPicPublicId);
+    }
+
     // Delete all messages in the room
     await Message.deleteMany({ roomId });
 
@@ -654,7 +658,7 @@ export const unbanUser = async (req, res) => {
 export const updateRoom = async (req, res) => {
   try {
     const { roomId } = req.params;
-    let { name, roomPic } = req.body;
+    let { name, roomPic, roomPicPublicId } = req.body;
 
     const room = await Room.findById(roomId);
     if (!room) {
@@ -681,8 +685,13 @@ export const updateRoom = async (req, res) => {
       }
       updates.name = name;
     }
-    if (roomPic !== undefined) {
+    if (roomPic !== undefined && roomPic !== room.roomPic) {
+      // Cleanup OLD Cloudinary image if it exists
+      if (room.roomPicPublicId && roomPicPublicId !== room.roomPicPublicId) {
+        deleteFile(room.roomPicPublicId);
+      }
       updates.roomPic = roomPic;
+      updates.roomPicPublicId = roomPicPublicId || "";
     }
 
     const updatedRoom = await Room.findByIdAndUpdate(

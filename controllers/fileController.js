@@ -2,7 +2,8 @@ import cloudinary from "../config/cloudinary.js";
 import hashIP from "../utils/hashIP.js";
 import { checkAndIncrement } from "../utils/rateLimiter.js";
 
-const MEDIA_LIMIT = parseInt(process.env.DAILY_LIMIT_MEDIA) || 200;
+const MEDIA_LIMIT = parseInt(process.env.DAILY_LIMIT_MEDIA) || 20;
+const AVATAR_LIMIT = parseInt(process.env.DAILY_LIMIT_AVATAR_CHANGES) || 5;
 
 /**
  * POST /api/files/upload-url
@@ -19,10 +20,11 @@ export const getUploadUrl = async (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
     const ipHashed = hashIP(ip);
     const action = folder.includes('profiles') ? "upload_avatar" : "upload_media";
-    const isLimited = await checkAndIncrement(ipHashed, action, MEDIA_LIMIT);
+    const currentLimit = folder.includes('profiles') ? AVATAR_LIMIT : MEDIA_LIMIT;
+    const isLimited = await checkAndIncrement(ipHashed, action, currentLimit);
 
     if (isLimited) {
-      return res.status(429).json({ error: `Daily upload limit reached (${MEDIA_LIMIT} files). Try again later.` });
+      return res.status(429).json({ error: `Daily limit reached (${currentLimit} files). Try again later.` });
     }
 
     // Check if Cloudinary is configured

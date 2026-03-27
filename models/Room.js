@@ -20,6 +20,10 @@ const roomSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    roomPicPublicId: {
+      type: String, // Cloudinary public_id
+      default: "",
+    },
 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

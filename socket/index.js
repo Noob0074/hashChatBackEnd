@@ -15,7 +15,7 @@ let ioInstance;
  */
 const initSocket = (io) => {
   // ========================
-  // AUTH MIDDLEWARE
+  // AUTH MIDDLEWARE (Main Namespace)
   // ========================
   io.use(async (socket, next) => {
     try {
@@ -45,7 +45,6 @@ const initSocket = (io) => {
       next(new Error("Unauthorized — invalid token"));
     }
   });
-
   // ========================
   // CONNECTION HANDLER
   // ========================

@@ -25,6 +25,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    profilePicPublicId: {
+      type: String, // Cloudinary public_id
+      default: "",
+    },
 
     blockedUsers: [
       {

@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendVerificationEmail } from "../utils/email.js";
 import { checkAndIncrement } from "../utils/rateLimiter.js";
+import { deleteFile } from "./fileController.js";
 
 const AVATAR_LIMIT = parseInt(process.env.DAILY_LIMIT_AVATAR_CHANGES) || 5;
 
@@ -65,7 +66,7 @@ export const getMe = async (req, res) => {
  */
 export const updateProfile = async (req, res) => {
   try {
-    let { username, email, password, currentPassword, profilePic } = req.body;
+    let { username, email, password, currentPassword, profilePic, profilePicPublicId } = req.body;
     const updates = {};
     const user = await User.findById(req.userId);
 
@@ -148,7 +149,14 @@ export const updateProfile = async (req, res) => {
       if (isLimited) {
         return res.status(429).json({ error: `Daily avatar update limit reached (${AVATAR_LIMIT} changes). Try again later.` });
       }
+
+      // Cleanup OLD Cloudinary image if it exists
+      if (user.profilePicPublicId && profilePicPublicId !== user.profilePicPublicId) {
+        deleteFile(user.profilePicPublicId);
+      }
+
       updates.profilePic = profilePic;
+      updates.profilePicPublicId = profilePicPublicId || "";
     }
 
     const updatedUser = await User.findByIdAndUpdate(req.userId, updates, { new: true })

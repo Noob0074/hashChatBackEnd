@@ -12,6 +12,7 @@ import hashIP from "../utils/hashIP.js";
 import sanitize from "../utils/sanitize.js";
 import { checkLimit, incrementLimit, checkAndIncrement, resetLimit } from "../utils/rateLimiter.js";
 import { sendVerificationEmail, sendPasswordResetEmail } from "../utils/email.js";
+import { deleteFile } from "./fileController.js";
 
 const GUEST_LIMIT = parseInt(process.env.DAILY_LIMIT_GUESTS) || 3;
 const ROOM_LIMIT = parseInt(process.env.DAILY_LIMIT_ROOMS) || 5;
@@ -394,9 +395,22 @@ export const deleteAccount = async (req, res) => {
     user.isDeleted = true;
     await user.save();
 
+    // Cleanup user's profile pic from Cloudinary
+    if (user.profilePicPublicId) {
+      deleteFile(user.profilePicPublicId);
+    }
+
     // Find and delete all rooms created by this user
     const userRooms = await Room.find({ createdBy: user._id });
     const userRoomIds = userRooms.map((r) => r._id);
+
+    // Cleanup room avatars from Cloudinary
+    for (const room of userRooms) {
+      if (room.roomPicPublicId) {
+        deleteFile(room.roomPicPublicId);
+      }
+    }
+
     await Room.deleteMany({ createdBy: user._id });
     await Message.deleteMany({ roomId: { $in: userRoomIds } });
 
