@@ -5,6 +5,8 @@ import sanitize from "../utils/sanitize.js";
 import { getIo } from "../socket/index.js";
 import { deleteFile } from "./fileController.js";
 
+const MAX_MESSAGE_LENGTH = parseInt(process.env.MAX_MESSAGE_LENGTH) || 5000;
+
 /**
  * GET /api/messages/:roomId?limit=50&cursor=timestamp
  * Get messages for a room with cursor-based pagination
@@ -97,8 +99,8 @@ export const sendMessage = async (req, res) => {
       return res.status(400).json({ error: "Room ID and content required" });
     }
 
-    if (content.length > 5000) {
-      return res.status(400).json({ error: "Message too long (max 5000 chars)" });
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({ error: `Message too long (max ${MAX_MESSAGE_LENGTH} chars)` });
     }
 
     // Verify room access
@@ -172,6 +174,10 @@ export const updateMessage = async (req, res) => {
     }
 
     content = sanitize(content);
+
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({ error: `Message too long (max ${MAX_MESSAGE_LENGTH} chars)` });
+    }
 
     const message = await Message.findById(messageId);
     if (!message) {

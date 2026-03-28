@@ -4,6 +4,10 @@ import Room from "../models/Room.js";
 import User from "../models/User.js";
 import sanitize from "../utils/sanitize.js";
 
+const SOCKET_MESSAGE_BURST_LIMIT = parseInt(process.env.SOCKET_MESSAGE_BURST_LIMIT) || 5;
+const SOCKET_MESSAGE_BURST_WINDOW_MS = parseInt(process.env.SOCKET_MESSAGE_BURST_WINDOW_MS) || 2000;
+const MAX_MESSAGE_LENGTH = parseInt(process.env.MAX_MESSAGE_LENGTH) || 5000;
+
 // In-memory store: userId → Set of socketIds
 const onlineUsers = new Map();
 // Message rate limiting: userId → lastMessageTimestamps[]
@@ -116,12 +120,14 @@ const initSocket = (io) => {
           return socket.emit("error", { message: "Room ID and content required" });
         }
 
-        // Rate limit: 5 messages per 2 seconds
+        // Rate limit burst control for socket messages
         const now = Date.now();
         const timestamps = messageTimestamps.get(userId) || [];
-        const recentTimestamps = timestamps.filter(t => now - t < 2000);
+        const recentTimestamps = timestamps.filter(
+          (t) => now - t < SOCKET_MESSAGE_BURST_WINDOW_MS
+        );
         
-        if (recentTimestamps.length >= 5) {
+        if (recentTimestamps.length >= SOCKET_MESSAGE_BURST_LIMIT) {
           return socket.emit("error", { message: "Message limit reached. Slow down." });
         }
         
@@ -131,7 +137,7 @@ const initSocket = (io) => {
         // Sanitize content
         const sanitizedContent = type === "text" ? sanitize(content) : content;
 
-        if (sanitizedContent.length > 5000) {
+        if (sanitizedContent.length > MAX_MESSAGE_LENGTH) {
           return socket.emit("error", { message: "Message too long" });
         }
 

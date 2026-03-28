@@ -51,8 +51,8 @@ const cleanupExpiredMedia = async () => {
 
 /**
  * Cleanup Old Accounts
- * Deletes inactive guest accounts, purges old deleted non-guest users,
- * and scrubs sensitive metadata from deleted guest placeholders after retention.
+ * Deletes inactive guest accounts and scrubs sensitive metadata
+ * from deleted guest and registered-user placeholders after retention.
  */
 const cleanupOldAccounts = async () => {
   try {
@@ -65,10 +65,13 @@ const cleanupOldAccounts = async () => {
     const deletedGuestCutoff = new Date(
       Date.now() - deletedGuestRetentionDays * 24 * 60 * 60 * 1000
     );
-    const oldDeletedUsersCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const deletedUserRetentionDays = parseInt(process.env.DELETED_USER_RETENTION_DAYS) || 30;
+    const deletedUserCutoff = new Date(
+      Date.now() - deletedUserRetentionDays * 24 * 60 * 60 * 1000
+    );
 
     console.log(
-      `Running account cleanup (inactive guests: ${inactiveGuestRetentionDays} days, deleted guest scrub: ${deletedGuestRetentionDays} days)...`
+      `Running account cleanup (inactive guests: ${inactiveGuestRetentionDays} days, deleted guests: ${deletedGuestRetentionDays} days, deleted users: ${deletedUserRetentionDays} days)...`
     );
 
     const scrubbedGuests = await User.updateMany(
@@ -95,26 +98,50 @@ const cleanupOldAccounts = async () => {
       }
     );
 
+    const scrubbedUsers = await User.updateMany(
+      {
+        isGuest: false,
+        isDeleted: true,
+        deletedAt: { $ne: null, $lte: deletedUserCutoff },
+        $or: [
+          { email: { $exists: true, $ne: null } },
+          { ipHash: { $exists: true, $ne: null } },
+          { fingerprint: { $exists: true, $ne: null } },
+          { profilePic: { $ne: "" } },
+          { profilePicPublicId: { $ne: "" } },
+          { password: { $exists: true, $ne: null } },
+        ],
+      },
+      {
+        $unset: {
+          email: 1,
+          password: 1,
+          ipHash: 1,
+          fingerprint: 1,
+        },
+        $set: {
+          profilePic: "",
+          profilePicPublicId: "",
+        },
+      }
+    );
+
     const inactiveGuests = await User.find({
       isGuest: true,
       isDeleted: false,
       lastActive: { $lt: inactiveGuestCutoff },
     });
 
-    const oldDeletedUsers = await User.find({
-      isDeleted: true,
-      isGuest: false,
-      updatedAt: { $lt: oldDeletedUsersCutoff },
-    });
-
-    const targetUsers = [...inactiveGuests, ...oldDeletedUsers];
-
-    if (targetUsers.length === 0 && (!scrubbedGuests.modifiedCount || scrubbedGuests.modifiedCount === 0)) {
+    if (
+      inactiveGuests.length === 0 &&
+      (!scrubbedGuests.modifiedCount || scrubbedGuests.modifiedCount === 0) &&
+      (!scrubbedUsers.modifiedCount || scrubbedUsers.modifiedCount === 0)
+    ) {
       console.log("No old accounts to purge or scrub.");
       return;
     }
 
-    for (const user of targetUsers) {
+    for (const user of inactiveGuests) {
       console.log(`Purging user: ${user.username} (${user._id})`);
 
       await Room.deleteMany({ createdBy: user._id });
@@ -126,7 +153,7 @@ const cleanupOldAccounts = async () => {
     }
 
     console.log(
-      `Account cleanup completed (${targetUsers.length} purged, ${scrubbedGuests.modifiedCount || 0} deleted guest placeholders scrubbed).`
+      `Account cleanup completed (${inactiveGuests.length} inactive guests purged, ${scrubbedGuests.modifiedCount || 0} deleted guest placeholders scrubbed, ${scrubbedUsers.modifiedCount || 0} deleted registered users scrubbed).`
     );
   } catch (error) {
     console.error("Account cleanup error:", error);
