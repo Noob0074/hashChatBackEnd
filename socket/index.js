@@ -82,11 +82,11 @@ const initSocket = (io) => {
           return socket.emit("error", { message: "Not a member of this room" });
         }
 
-        const isBanned = room.bannedUsers.some(
-          (b) => b.toString() === userId.toString()
+        const isKicked = room.kickedUsers.some(
+          (k) => k.toString() === userId.toString()
         );
-        if (isBanned) {
-          return socket.emit("error", { message: "You are banned from this room" });
+        if (isKicked) {
+          return socket.emit("error", { message: "You were removed from this room" });
         }
 
         socket.join(roomId);
@@ -148,6 +148,13 @@ const initSocket = (io) => {
           return socket.emit("error", { message: "Not a member of this room" });
         }
 
+        const isKicked = room.kickedUsers.some(
+          (k) => k.toString() === userId.toString()
+        );
+        if (isKicked) {
+          return socket.emit("error", { message: "You were removed from this room" });
+        }
+
         // Check user not deleted
         const user = await User.findById(userId);
         if (!user || user.isDeleted) {
@@ -166,7 +173,7 @@ const initSocket = (io) => {
                 message: "This user is no longer available",
               });
             }
-            if (otherUser && otherUser.blockedUsers && otherUser.blockedUsers.includes(userId)) {
+            if (otherUser?.blockedUsers?.some((id) => id.toString() === userId.toString())) {
               return socket.emit("error", {
                 message: "You have been blocked by this user",
               });
@@ -195,8 +202,18 @@ const initSocket = (io) => {
           .populate("senderId", "username isDeleted isGuest")
           .lean();
 
-        // Broadcast to room
+        // Broadcast to users actively viewing the room
         io.to(roomId).emit("receive_message", populated);
+
+        // Notify all room members individually so inactive chats can update
+        room.members.forEach((memberId) => {
+          const memberSockets = onlineUsers.get(memberId.toString());
+          if (!memberSockets) return;
+
+          memberSockets.forEach((sid) => {
+            io.to(sid).emit("room_message", populated);
+          });
+        });
 
         // Acknowledge to sender
         socket.emit("message_sent", { messageId: message._id });
@@ -246,58 +263,6 @@ const initSocket = (io) => {
         io.to(roomId).emit("user_kicked", { userId: targetUserId, roomId });
       } catch (err) {
         socket.emit("error", { message: "Failed to kick user" });
-      }
-    });
-
-    // ========================
-    // ADMIN: BAN USER
-    // ========================
-    socket.on("ban_user", async ({ roomId, targetUserId }) => {
-      try {
-        const room = await Room.findById(roomId);
-        if (!room || room.createdBy.toString() !== userId.toString()) {
-          return socket.emit("error", { message: "Not authorized" });
-        }
-
-        // Update DB
-        await Room.findByIdAndUpdate(roomId, {
-          $addToSet: { bannedUsers: targetUserId },
-        });
-
-        // Notify the banned user
-        const targetSockets = onlineUsers.get(targetUserId);
-        if (targetSockets) {
-          targetSockets.forEach((sid) => {
-            io.to(sid).emit("banned", { roomId });
-            io.sockets.sockets.get(sid)?.leave(roomId);
-          });
-        }
-
-        // Notify room
-        io.to(roomId).emit("user_banned", { userId: targetUserId, roomId });
-      } catch (err) {
-        socket.emit("error", { message: "Failed to ban user" });
-      }
-    });
-
-    // ========================
-    // ADMIN: UNBAN USER
-    // ========================
-    socket.on("unban_user", async ({ roomId, targetUserId }) => {
-      try {
-        const room = await Room.findById(roomId);
-        if (!room || room.createdBy.toString() !== userId.toString()) {
-          return socket.emit("error", { message: "Not authorized" });
-        }
-
-        await Room.findByIdAndUpdate(roomId, {
-          $pull: { bannedUsers: targetUserId },
-        });
-
-        // Notify room
-        io.to(roomId).emit("user_unbanned", { userId: targetUserId, roomId });
-      } catch (err) {
-        socket.emit("error", { message: "Failed to unban user" });
       }
     });
 

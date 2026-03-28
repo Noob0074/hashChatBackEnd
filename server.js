@@ -47,17 +47,29 @@ const io = new Server(server, {
   },
 });
 
-// Instrument Socket.IO Admin UI (MUST be before initSocket to register /admin namespace first)
+// Instrument Socket.IO Admin UI only when explicitly enabled.
+// This avoids exposing an admin surface with weak fallback credentials.
 import bcrypt from "bcryptjs";
-const hashedPassword = bcrypt.hashSync(process.env.SOCKET_ADMIN_PASSWORD || "admin123", 10);
-instrument(io, {
-  auth: {
-    type: "basic",
-    username: process.env.SOCKET_ADMIN_USERNAME || "admin",
-    password: hashedPassword,
-  },
-  mode: "development",
-});
+const socketAdminEnabled = process.env.ENABLE_SOCKET_ADMIN === "true";
+if (socketAdminEnabled) {
+  const adminUsername = process.env.SOCKET_ADMIN_USERNAME;
+  const adminPassword = process.env.SOCKET_ADMIN_PASSWORD;
+
+  if (!adminUsername || !adminPassword) {
+    console.error("Socket admin is enabled, but SOCKET_ADMIN_USERNAME or SOCKET_ADMIN_PASSWORD is missing.");
+    process.exit(1);
+  }
+
+  const hashedPassword = bcrypt.hashSync(adminPassword, 10);
+  instrument(io, {
+    auth: {
+      type: "basic",
+      username: adminUsername,
+      password: hashedPassword,
+    },
+    mode: process.env.NODE_ENV === "production" ? "production" : "development",
+  });
+}
 
 // Initialize socket handlers
 initSocket(io);

@@ -25,15 +25,6 @@ const checkRoomAccess = async (req, res, next) => {
       return res.status(403).json({ error: "You are not a member of this room" });
     }
 
-    // Check if user is banned
-    const isBanned = room.bannedUsers.some(
-      (bannedId) => bannedId.toString() === userId.toString()
-    );
-
-    if (isBanned) {
-      return res.status(403).json({ error: "You are banned from this room" });
-    }
-
     // Attach room to request
     req.room = room;
 

@@ -12,8 +12,6 @@ import {
   approveRequest,
   rejectRequest,
   kickUser,
-  banUser,
-  unbanUser,
   updateRoom,
   deleteRoom,
   hideRoom,
@@ -39,8 +37,6 @@ router.post("/:roomId/leave", leaveRoom);
 router.post("/:roomId/approve", approveRequest);
 router.post("/:roomId/reject", rejectRequest);
 router.post("/:roomId/kick", kickUser);
-router.post("/:roomId/ban", banUser);
-router.post("/:roomId/unban", unbanUser);
 router.put("/:roomId", updateRoom);
 router.delete("/:roomId", deleteRoom);
 router.put("/:roomId/hide", hideRoom);

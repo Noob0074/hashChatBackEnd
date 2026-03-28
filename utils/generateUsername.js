@@ -2,10 +2,10 @@ import crypto from "crypto";
 
 /**
  * Generate a random anonymous username.
- * Format: Anon_XXXXX (5 random hex chars)
+ * Format: Anon_XXXXXX (6 random hex chars)
  */
 const generateUsername = () => {
-  const suffix = crypto.randomBytes(3).toString("hex").slice(0, 5).toUpperCase();
+  const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `Anon_${suffix}`;
 };
 

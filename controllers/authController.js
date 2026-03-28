@@ -15,12 +15,15 @@ import { sendVerificationEmail, sendPasswordResetEmail } from "../utils/email.js
 import { deleteFile } from "./fileController.js";
 
 const GUEST_LIMIT = parseInt(process.env.DAILY_LIMIT_GUESTS) || 3;
-const ROOM_LIMIT = parseInt(process.env.DAILY_LIMIT_ROOMS) || 5;
 const REGISTER_LIMIT = parseInt(process.env.DAILY_LIMIT_REGISTER) || 5;
 const MAX_RESET_ATTEMPTS = parseInt(process.env.AUTH_MAX_RESET_ATTEMPTS) || 3;
 const RESET_LOCK_MINS = parseInt(process.env.AUTH_RESET_LOCK_MINS) || 60;
 const MAX_VERIFY_RESENDS = parseInt(process.env.AUTH_MAX_VERIFY_RESENDS) || 3;
 const VERIFY_RESEND_LOCK_MINS = parseInt(process.env.AUTH_VERIFY_RESEND_LOCK_MINS) || 30;
+const USERNAME_RULES_MESSAGE =
+  "Username can only contain letters, numbers, underscores, and dots.";
+const PASSWORD_RULES_MESSAGE =
+  "Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character (such as . _ @ $ ! % * ? &).";
 
 // Helper: generate JWT
 const generateToken = (userId) => {
@@ -139,24 +142,20 @@ export const register = async (req, res) => {
     username = sanitize(username.trim());
     email = sanitize(email.trim().toLowerCase());
 
-    // Strict Alpha-only Username check
+    // Enforce the configured username character set
     const userRegex = new RegExp(process.env.AUTH_USERNAME_REGEX || "^[a-zA-Z]+$");
     if (!userRegex.test(username)) {
-      return res.status(400).json({ 
-        error: "Username can only contain alphabets, numbers, underscores, and dots." 
-      });
+      return res.status(400).json({ error: USERNAME_RULES_MESSAGE });
     }
 
     if (username.length < 3 || username.length > 30) {
       return res.status(400).json({ error: "Username must be 3-30 characters" });
     }
 
-    // Strong Password check
+    // Enforce the configured password strength rules
     const passRegex = new RegExp(process.env.AUTH_PASSWORD_REGEX || "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$");
     if (!passRegex.test(password)) {
-      return res.status(400).json({ 
-        error: "Password must be at least 8 characters and include uppercase, lowercase, number, and special character" 
-      });
+      return res.status(400).json({ error: PASSWORD_RULES_MESSAGE });
     }
 
     // Check if email or username is already taken by a non-guest, non-deleted user
@@ -209,11 +208,26 @@ export const register = async (req, res) => {
     });
 
     // Send verification email
-    await sendVerificationEmail(email, verifyToken);
+    const emailSent = await sendVerificationEmail(email, verifyToken);
 
     // Generate JWT
     const token = generateToken(user._id);
     setTokenCookie(res, token);
+
+    if (!emailSent) {
+      return res.status(502).json({
+        error: "Registration completed, but verification email could not be sent. Please try resending verification.",
+        user: {
+          _id: user._id,
+          username: user.username,
+          email: user.email,
+          isGuest: user.isGuest,
+          isVerified: user.isVerified,
+          profilePic: user.profilePic,
+        },
+        token,
+      });
+    }
 
     res.status(201).json({
       message: "Registration successful. Verification email sent.",
@@ -374,7 +388,11 @@ export const resendVerification = async (req, res) => {
       expiresAt: new Date(Date.now() + emailExpiryHrs * 60 * 60 * 1000),
     });
 
-    await sendVerificationEmail(user.email, verifyToken);
+    const emailSent = await sendVerificationEmail(user.email, verifyToken);
+
+    if (!emailSent) {
+      return res.status(502).json({ error: "Failed to send verification email. Please try again later." });
+    }
 
     res.json({ message: "Verification email resent" });
   } catch (error) {
@@ -393,6 +411,7 @@ export const deleteAccount = async (req, res) => {
 
     // Mark as deleted
     user.isDeleted = true;
+    user.deletedAt = new Date();
     await user.save();
 
     // Cleanup user's profile pic from Cloudinary
@@ -400,8 +419,12 @@ export const deleteAccount = async (req, res) => {
       deleteFile(user.profilePicPublicId);
     }
 
-    // Find and delete all rooms created by this user
-    const userRooms = await Room.find({ createdBy: user._id });
+    // Delete only non-DM rooms created by this user.
+    // DMs should stay so the other participant keeps the chat history.
+    const userRooms = await Room.find({
+      createdBy: user._id,
+      type: { $ne: "dm" },
+    });
     const userRoomIds = userRooms.map((r) => r._id);
 
     // Cleanup room avatars from Cloudinary
@@ -411,14 +434,23 @@ export const deleteAccount = async (req, res) => {
       }
     }
 
-    await Room.deleteMany({ createdBy: user._id });
+    await Room.deleteMany({ createdBy: user._id, type: { $ne: "dm" } });
     await Message.deleteMany({ roomId: { $in: userRoomIds } });
 
-    // Remove from all other rooms
+    // Remove the deleted user from non-DM rooms only.
+    // Keeping them in DM membership preserves the conversation for the other user.
     await Room.updateMany(
-      { members: user._id },
+      { members: user._id, type: { $ne: "dm" } },
       {
         $pull: { members: user._id, pendingRequests: user._id },
+      }
+    );
+
+    // Also clear pending requests from rooms they were never admitted to.
+    await Room.updateMany(
+      { pendingRequests: user._id, type: { $ne: "dm" } },
+      {
+        $pull: { pendingRequests: user._id },
       }
     );
 
@@ -484,7 +516,11 @@ export const forgotPassword = async (req, res) => {
       expiresAt: new Date(Date.now() + resetExpiryHrs * 60 * 60 * 1000),
     });
 
-    await sendPasswordResetEmail(user.email, resetToken);
+    const emailSent = await sendPasswordResetEmail(user.email, resetToken);
+
+    if (!emailSent) {
+      return res.status(502).json({ error: "Failed to send reset email. Please try again later." });
+    }
 
     res.json({ message: "If an account exists with that email, we've sent a reset link." });
   } catch (error) {
@@ -505,12 +541,10 @@ export const resetPassword = async (req, res) => {
       return res.status(400).json({ error: "Token and password are required" });
     }
 
-    // Enforce full password strength (same as registration)
+    // Enforce the configured password strength rules
     const passRegex = new RegExp(process.env.AUTH_PASSWORD_REGEX || "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$");
     if (!passRegex.test(password)) {
-      return res.status(400).json({
-        error: "Password must be at least 8 characters and include uppercase, lowercase, number, and special character"
-      });
+      return res.status(400).json({ error: PASSWORD_RULES_MESSAGE });
     }
 
     // Explicitly check expiry (TTL index can lag up to 60 seconds)

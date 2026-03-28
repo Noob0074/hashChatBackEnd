@@ -45,13 +45,6 @@ const roomSchema = new mongoose.Schema(
       },
     ],
 
-    bannedUsers: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-
     kickedUsers: [
       {
         type: mongoose.Schema.Types.ObjectId,

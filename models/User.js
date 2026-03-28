@@ -15,6 +15,8 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
       lowercase: true,
+      default: undefined,
+      set: (value) => (value == null || value === "" ? undefined : value),
     },
 
     password: {
@@ -45,6 +47,11 @@ const userSchema = new mongoose.Schema(
     isDeleted: {
       type: Boolean,
       default: false,
+    },
+
+    deletedAt: {
+      type: Date,
+      default: null,
     },
 
     isVerified: {

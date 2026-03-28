@@ -12,9 +12,8 @@ const cleanupExpiredMedia = async () => {
     const expiryDays = parseInt(process.env.MEDIA_EXPIRY_DAYS) || 7;
     const threshold = new Date(Date.now() - expiryDays * 24 * 60 * 60 * 1000);
 
-    console.log(`🧹 Running media cleanup (expiry: ${expiryDays} days, threshold: ${threshold.toISOString()})...`);
+    console.log(`Running media cleanup (expiry: ${expiryDays} days, threshold: ${threshold.toISOString()})...`);
 
-    // Find messages with publicId that are older than threshold and not yet marked expired
     const expiredMessages = await Message.find({
       publicId: { $exists: true, $ne: null },
       type: { $ne: "text" },
@@ -23,99 +22,124 @@ const cleanupExpiredMedia = async () => {
     });
 
     if (expiredMessages.length === 0) {
-      console.log("✨ No expired media found.");
+      console.log("No expired media found.");
       return;
     }
 
-    console.log(`🔍 Found ${expiredMessages.length} expired media items.`);
+    console.log(`Found ${expiredMessages.length} expired media items.`);
 
     for (const msg of expiredMessages) {
       try {
-        // 1. Delete from Cloudinary
-        // Note: uploader.destroy returns { result: 'ok' } even if file doesn't exist anymore
         await cloudinary.uploader.destroy(msg.publicId);
-        console.log(`   🗑️ Deleted Cloudinary asset: ${msg.publicId}`);
+        console.log(`Deleted Cloudinary asset: ${msg.publicId}`);
 
-        // 2. Update Message in DB
         msg.content = "[Media Expired]";
         msg.isExpired = true;
-        // Don't nullify publicId yet, so we don't try to delete it again if save fails
         await msg.save();
-        
-        // Now safely remove publicId
-        await Message.findByIdAndUpdate(msg._id, { $unset: { publicId: 1 } });
 
+        await Message.findByIdAndUpdate(msg._id, { $unset: { publicId: 1 } });
       } catch (err) {
-        console.error(`   ❌ Failed to cleanup message ${msg._id}:`, err.message);
+        console.error(`Failed to cleanup message ${msg._id}:`, err.message);
       }
     }
 
-    console.log("✅ Media cleanup completed.");
+    console.log("Media cleanup completed.");
   } catch (error) {
-    console.error("❌ Cleanup worker error:", error);
+    console.error("Cleanup worker error:", error);
   }
 };
 
 /**
  * Cleanup Old Accounts
- * Deletes guest accounts inactive for 30+ days and soft-deleted users.
+ * Deletes inactive guest accounts, purges old deleted non-guest users,
+ * and scrubs sensitive metadata from deleted guest placeholders after retention.
  */
 const cleanupOldAccounts = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    console.log(`🧹 Running account cleanup (threshold: ${thirtyDaysAgo.toISOString()})...`);
+    const deletedGuestRetentionDays = parseInt(process.env.DELETED_GUEST_RETENTION_DAYS) || 30;
+    const deletedGuestCutoff = new Date(
+      Date.now() - deletedGuestRetentionDays * 24 * 60 * 60 * 1000
+    );
 
-    // 1. Find inactive guests
+    console.log(`Running account cleanup (threshold: ${thirtyDaysAgo.toISOString()})...`);
+
+    const scrubbedGuests = await User.updateMany(
+      {
+        isGuest: true,
+        isDeleted: true,
+        deletedAt: { $ne: null, $lte: deletedGuestCutoff },
+        $or: [
+          { ipHash: { $exists: true, $ne: null } },
+          { fingerprint: { $exists: true, $ne: null } },
+          { profilePic: { $ne: "" } },
+          { profilePicPublicId: { $ne: "" } },
+        ],
+      },
+      {
+        $unset: {
+          ipHash: 1,
+          fingerprint: 1,
+        },
+        $set: {
+          profilePic: "",
+          profilePicPublicId: "",
+        },
+      }
+    );
+
     const inactiveGuests = await User.find({
       isGuest: true,
-      lastActive: { $lt: thirtyDaysAgo }
+      isDeleted: false,
+      lastActive: { $lt: thirtyDaysAgo },
     });
 
-    // 2. Find long-term soft-deleted users
     const oldDeletedUsers = await User.find({
       isDeleted: true,
-      updatedAt: { $lt: thirtyDaysAgo }
+      isGuest: false,
+      updatedAt: { $lt: thirtyDaysAgo },
     });
 
     const targetUsers = [...inactiveGuests, ...oldDeletedUsers];
 
-    if (targetUsers.length === 0) {
-      console.log("✨ No old accounts to purge.");
+    if (targetUsers.length === 0 && (!scrubbedGuests.modifiedCount || scrubbedGuests.modifiedCount === 0)) {
+      console.log("No old accounts to purge or scrub.");
       return;
     }
 
     for (const user of targetUsers) {
-      console.log(`   🗑️ Purging user: ${user.username} (${user._id})`);
-      
-      // Clean up rooms created by this user
+      console.log(`Purging user: ${user.username} (${user._id})`);
+
       await Room.deleteMany({ createdBy: user._id });
-      // Remove from all other rooms
       await Room.updateMany(
         { members: user._id },
         { $pull: { members: user._id, pendingRequests: user._id } }
       );
-      // Delete user
       await User.findByIdAndDelete(user._id);
     }
 
-    console.log(`✅ Account cleanup completed (${targetUsers.length} purged).`);
+    console.log(
+      `Account cleanup completed (${targetUsers.length} purged, ${scrubbedGuests.modifiedCount || 0} deleted guest placeholders scrubbed).`
+    );
   } catch (error) {
-    console.error("❌ Account cleanup error:", error);
+    console.error("Account cleanup error:", error);
   }
 };
 
 /**
  * Start the cleanup worker on a schedule
- * Runs once immediately, then every 6 hours
  */
 export const startCleanupWorker = () => {
-  // Run immediately on start
+  const mediaCleanupIntervalMs = parseInt(process.env.MEDIA_CLEANUP_INTERVAL_MS) || 6 * 60 * 60 * 1000;
+  const accountCleanupIntervalMs = parseInt(process.env.ACCOUNT_CLEANUP_INTERVAL_MS) || 24 * 60 * 60 * 1000;
+
   cleanupExpiredMedia();
   cleanupOldAccounts();
 
-  // Schedule to run periodically
-  setInterval(cleanupExpiredMedia, 6 * 60 * 60 * 1000); // 6h
-  setInterval(cleanupOldAccounts, 24 * 60 * 60 * 1000); // 24h
-  
-  console.log("🚀 Maintenance workers initialized (Media: 6h, Accounts: 24h).");
+  setInterval(cleanupExpiredMedia, mediaCleanupIntervalMs);
+  setInterval(cleanupOldAccounts, accountCleanupIntervalMs);
+
+  console.log(
+    `Maintenance workers initialized (Media: ${mediaCleanupIntervalMs}ms, Accounts: ${accountCleanupIntervalMs}ms).`
+  );
 };

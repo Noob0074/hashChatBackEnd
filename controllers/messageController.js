@@ -114,6 +114,13 @@ export const sendMessage = async (req, res) => {
       return res.status(403).json({ error: "Not a member of this room" });
     }
 
+    const isKicked = room.kickedUsers?.some(
+      (userId) => userId.toString() === req.userId.toString()
+    );
+    if (isKicked) {
+      return res.status(403).json({ error: "You can no longer send messages in this room" });
+    }
+
     // For DM rooms, check if the other user is deleted or has blocked sender
     if (room.type === "dm") {
       const otherUserId = room.members.find(
@@ -171,9 +178,22 @@ export const updateMessage = async (req, res) => {
       return res.status(404).json({ error: "Message not found" });
     }
 
+    const room = await Room.findById(message.roomId);
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
     // Check ownership
     if (message.senderId.toString() !== req.userId.toString()) {
       return res.status(403).json({ error: "Not authorized to edit this message" });
+    }
+
+    const isKicked = room.kickedUsers?.some(
+      (kickedUserId) => kickedUserId.toString() === req.userId.toString()
+    );
+
+    if (isKicked) {
+      return res.status(403).json({ error: "You can no longer edit messages in this room" });
     }
 
     // Update
@@ -215,13 +235,30 @@ export const deleteMessage = async (req, res) => {
 
     const roomId = message.roomId.toString();
     const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    if (room.type === "dm" && message.senderId.toString() !== req.userId.toString()) {
+      return res.status(403).json({ error: "Not authorized to delete this message" });
+    }
     
     // Check permission: sender OR room owner
     const isSender = message.senderId.toString() === req.userId.toString();
-    const isRoomOwner = room?.createdBy?.toString() === req.userId.toString();
+    const isRoomOwner = room.type !== "dm" && room?.createdBy?.toString() === req.userId.toString();
 
     if (!isSender && !isRoomOwner) {
       return res.status(403).json({ error: "Not authorized to delete this message" });
+    }
+
+    if (isSender && !isRoomOwner) {
+      const isKicked = room.kickedUsers?.some(
+        (kickedUserId) => kickedUserId.toString() === req.userId.toString()
+      );
+
+      if (isKicked) {
+        return res.status(403).json({ error: "You can no longer delete messages in this room" });
+      }
     }
 
     // Media cleanup if exists (with correct resourceType)

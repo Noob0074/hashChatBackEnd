@@ -6,8 +6,13 @@ import crypto from "crypto";
 import { sendVerificationEmail } from "../utils/email.js";
 import { checkAndIncrement } from "../utils/rateLimiter.js";
 import { deleteFile } from "./fileController.js";
+import { getIo, getUserSockets } from "../socket/index.js";
 
 const AVATAR_LIMIT = parseInt(process.env.DAILY_LIMIT_AVATAR_CHANGES) || 5;
+const USERNAME_RULES_MESSAGE =
+  "Username can only contain letters, numbers, underscores, and dots.";
+const PASSWORD_RULES_MESSAGE =
+  "Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character (such as . _ @ $ ! % * ? &).";
 
 /**
  * GET /api/users/search?username=abc
@@ -89,12 +94,10 @@ export const updateProfile = async (req, res) => {
     if (username) {
       username = sanitize(username.trim());
       
-      // Strict Alpha-only Username check
+      // Enforce the configured username character set
       const userRegex = new RegExp(process.env.AUTH_USERNAME_REGEX || "^[a-zA-Z]+$");
       if (!userRegex.test(username)) {
-        return res.status(400).json({ 
-          error: "Username can only contain alphabets, numbers, underscores, and dots." 
-        });
+        return res.status(400).json({ error: USERNAME_RULES_MESSAGE });
       }
 
       if (username.length < 3 || username.length > 30) {
@@ -132,12 +135,10 @@ export const updateProfile = async (req, res) => {
     }
 
     if (password && !user.isGuest) {
-      // Strong Password check
+      // Enforce the configured password strength rules
       const passRegex = new RegExp(process.env.AUTH_PASSWORD_REGEX || "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$");
       if (!passRegex.test(password)) {
-        return res.status(400).json({ 
-          error: "Password must be at least 8 characters and include uppercase, lowercase, number, and special characters (like @, $, !, %, *, ?, &, _, or .)" 
-        });
+        return res.status(400).json({ error: PASSWORD_RULES_MESSAGE });
       }
       const salt = await bcrypt.genSalt(12);
       updates.password = await bcrypt.hash(password, salt);
@@ -190,6 +191,17 @@ export const blockUser = async (req, res) => {
       .select("-password -ipHash -fingerprint")
       .populate("blockedUsers", "username profilePic");
 
+    const io = getIo();
+    if (io) {
+      const payload = { actorUserId: req.userId, targetUserId };
+      getUserSockets(targetUserId.toString()).forEach((sid) => {
+        io.to(sid).emit("dm_blocked", payload);
+      });
+      getUserSockets(req.userId.toString()).forEach((sid) => {
+        io.to(sid).emit("dm_blocked", payload);
+      });
+    }
+
     res.json({ message: "User blocked", user });
   } catch (error) {
     console.error("Block user error:", error);
@@ -212,6 +224,17 @@ export const unblockUser = async (req, res) => {
     )
       .select("-password -ipHash -fingerprint")
       .populate("blockedUsers", "username profilePic");
+
+    const io = getIo();
+    if (io) {
+      const payload = { actorUserId: req.userId, targetUserId };
+      getUserSockets(targetUserId.toString()).forEach((sid) => {
+        io.to(sid).emit("dm_unblocked", payload);
+      });
+      getUserSockets(req.userId.toString()).forEach((sid) => {
+        io.to(sid).emit("dm_unblocked", payload);
+      });
+    }
 
     res.json({ message: "User unblocked", user });
   } catch (error) {

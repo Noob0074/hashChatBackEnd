@@ -2,11 +2,13 @@ import Room from "../models/Room.js";
 import Message from "../models/Message.js";
 import User from "../models/User.js";
 import sanitize from "../utils/sanitize.js";
-import { checkLimit, incrementLimit, checkAndIncrement } from "../utils/rateLimiter.js";
+import { checkAndIncrement } from "../utils/rateLimiter.js";
 import { getIo, getUserSockets } from "../socket/index.js";
 import { deleteFile } from "./fileController.js";
 
 const ROOM_LIMIT = parseInt(process.env.DAILY_LIMIT_ROOMS) || 5;
+const ROOM_NAME_RULES_MESSAGE =
+  "Room name can only contain letters, numbers, underscores, and dots.";
 
 /**
  * POST /api/rooms
@@ -23,10 +25,10 @@ export const createRoom = async (req, res) => {
 
     name = sanitize(name?.trim());
     
-    // Strict Alpha-only Room Name check
+    // Enforce the configured room-name character set
     const roomRegex = new RegExp(process.env.AUTH_ROOMNAME_REGEX || "^[a-zA-Z]+$");
     if (!roomRegex.test(name)) {
-      return res.status(400).json({ error: "Room name must contain only alphabets (no spaces or numbers)" });
+      return res.status(400).json({ error: ROOM_NAME_RULES_MESSAGE });
     }
 
     if (!name || name.length < 2 || name.length > 50) {
@@ -160,11 +162,6 @@ export const joinRoom = async (req, res) => {
       return res.status(429).json({ error: `Daily join limit reached. Try again later.` });
     }
 
-    // Check if banned
-    if (room.bannedUsers.some(id => id.toString() === userId.toString())) {
-      return res.status(403).json({ error: "You are banned from this room" });
-    }
-
     // Check if already a member
     if (room.members.some(id => id.toString() === userId.toString())) {
       return res.status(400).json({ error: "Already a member of this room" });
@@ -255,7 +252,6 @@ export const getMyRooms = async (req, res) => {
     })
       .populate("members", "username isGuest isDeleted blockedUsers profilePic")
       .populate("kickedUsers", "username")
-      .populate("bannedUsers", "username")
       .populate("createdBy", "username")
       .sort({ updatedAt: -1 });
 
@@ -290,7 +286,6 @@ export const getRoomDetails = async (req, res) => {
     const room = await Room.findById(req.params.roomId)
       .populate("members", "username isGuest isDeleted isVerified profilePic")
       .populate("pendingRequests", "username")
-      .populate("bannedUsers", "username")
       .populate("createdBy", "username");
 
     if (!room) {
@@ -328,7 +323,7 @@ export const searchRooms = async (req, res) => {
 
     const rooms = await Room.find({
       name: { $regex: escapedName, $options: "i" },
-      type: { $in: ["public", "private"] },
+      type: "public",
     })
       .select("name type members createdBy")
       .populate("createdBy", "username")
@@ -478,57 +473,6 @@ export const kickUser = async (req, res) => {
 };
 
 /**
- * POST /api/rooms/:roomId/ban
- * Ban a user from room (admin only)
- */
-export const banUser = async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const { userId: targetUserId } = req.body;
-
-    const room = await Room.findById(roomId);
-    if (!room) {
-      return res.status(404).json({ error: "Room not found" });
-    }
-
-    if (room.createdBy.toString() !== req.userId.toString()) {
-      return res.status(403).json({ error: "Not authorized" });
-    }
-
-    if (targetUserId === room.createdBy.toString()) {
-      return res.status(400).json({ error: "Cannot ban the admin" });
-    }
-
-    await Room.findByIdAndUpdate(roomId, {
-      $addToSet: { bannedUsers: targetUserId },
-    });
-
-    await Room.updateOne(
-      { _id: roomId, "accessLedger.userId": targetUserId, "accessLedger.leftAt": null },
-      { $set: { "accessLedger.$.leftAt": Date.now() } }
-    );
-
-    const io = getIo();
-    if (io) {
-      const targetSockets = getUserSockets(targetUserId.toString());
-      targetSockets.forEach((sid) => {
-        const socket = io.sockets.sockets.get(sid);
-        if (socket) {
-          socket.leave(roomId);
-          socket.emit("banned", { roomId });
-        }
-      });
-      io.to(roomId).emit("user_banned", { userId: targetUserId, roomId });
-    }
-
-    res.json({ message: "User banned" });
-  } catch (error) {
-    console.error("Ban user error:", error);
-    res.status(500).json({ error: "Failed to ban user" });
-  }
-};
-
-/**
  * DELETE /api/rooms/:roomId
  * Delete a room (admin only)
  */
@@ -610,48 +554,6 @@ export const hideRoom = async (req, res) => {
 };
 
 /**
- * POST /api/rooms/:roomId/unban
- * Unban a user from room (admin only)
- */
-export const unbanUser = async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const { userId: targetUserId } = req.body;
-
-    const room = await Room.findById(roomId);
-    if (!room) {
-      return res.status(404).json({ error: "Room not found" });
-    }
-
-    if (room.createdBy.toString() !== req.userId.toString()) {
-      return res.status(403).json({ error: "Not authorized" });
-    }
-
-    await Room.findByIdAndUpdate(roomId, {
-      $pull: { bannedUsers: targetUserId },
-      $push: { accessLedger: { userId: targetUserId, joinedAt: Date.now() } }
-    });
-
-    const io = getIo();
-    if (io) {
-      const targetSockets = getUserSockets(targetUserId.toString());
-      targetSockets.forEach((sid) => {
-        const socket = io.sockets.sockets.get(sid);
-        if (socket) {
-          socket.emit("unbanned", { roomId });
-        }
-      });
-      io.to(roomId).emit("user_unbanned", { userId: targetUserId, roomId });
-    }
-
-    res.json({ message: "User unbanned" });
-  } catch (error) {
-    console.error("Unban user error:", error);
-    res.status(500).json({ error: "Failed to unban user" });
-  }
-};
-
-/**
  * PUT /api/rooms/:roomId
  * Update room settings (admin only)
  */
@@ -674,10 +576,10 @@ export const updateRoom = async (req, res) => {
     if (name) {
       name = sanitize(name.trim());
       
-      // Strict Alpha-only Room Name check
+      // Enforce the configured room-name character set
       const roomRegex = new RegExp(process.env.AUTH_ROOMNAME_REGEX || "^[a-zA-Z]+$");
       if (!roomRegex.test(name)) {
-        return res.status(400).json({ error: "Room name must contain only alphabets" });
+        return res.status(400).json({ error: ROOM_NAME_RULES_MESSAGE });
       }
 
       if (name.length < 2 || name.length > 50) {
