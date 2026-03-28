@@ -98,7 +98,7 @@ export const getMessages = async (req, res) => {
 
 /**
  * GET /api/messages/:roomId/search?q=term&cursor=timestamp
- * Search text messages within a room.
+ * Search messages within a room, including text and media/file names.
  */
 export const searchMessages = async (req, res) => {
   try {
@@ -124,9 +124,11 @@ export const searchMessages = async (req, res) => {
     const searchRegex = new RegExp(escapedQuery, "i");
     const query = getRoomAccessQuery(room, req.userId, cursor);
     const searchFilter = {
-      type: "text",
       isDeleted: { $ne: true },
-      content: searchRegex,
+      $or: [
+        { content: searchRegex },
+        { fileName: searchRegex },
+      ],
     };
     query.$and.push(searchFilter);
     const totalQuery = getRoomAccessQuery(room, req.userId);
