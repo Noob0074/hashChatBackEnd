@@ -117,7 +117,7 @@ export const createDM = async (req, res) => {
       ],
     });
 
-    room = await room.populate("members", "username isGuest isDeleted blockedUsers profilePic");
+    room = await room.populate("members", "username isGuest isDeleted blockedUsers profilePic lastActive");
 
     // Notify target user if they are online
     const io = getIo();
@@ -250,9 +250,9 @@ export const getMyRooms = async (req, res) => {
       members: req.userId,
       hiddenBy: { $ne: req.userId }
     })
-      .populate("members", "username isGuest isDeleted blockedUsers profilePic")
+      .populate("members", "username isGuest isDeleted blockedUsers profilePic lastActive")
       .populate("kickedUsers", "username")
-      .populate("createdBy", "username")
+      .populate("createdBy", "username lastActive")
       .sort({ updatedAt: -1 });
 
     // For each room, get the last message
@@ -284,9 +284,9 @@ export const getMyRooms = async (req, res) => {
 export const getRoomDetails = async (req, res) => {
   try {
     const room = await Room.findById(req.params.roomId)
-      .populate("members", "username isGuest isDeleted isVerified profilePic")
+      .populate("members", "username isGuest isDeleted isVerified profilePic lastActive")
       .populate("pendingRequests", "username")
-      .populate("createdBy", "username");
+      .populate("createdBy", "username lastActive");
 
     if (!room) {
       return res.status(404).json({ error: "Room not found" });
@@ -372,7 +372,7 @@ export const approveRequest = async (req, res) => {
       $pull: { pendingRequests: targetUserId, kickedUsers: targetUserId },
       $addToSet: { members: targetUserId },
       $push: { accessLedger: { userId: targetUserId, joinedAt: Date.now() } }
-    }, { new: true }).populate("members", "username isGuest isDeleted blockedUsers profilePic").populate("createdBy", "username");
+    }, { new: true }).populate("members", "username isGuest isDeleted blockedUsers profilePic lastActive").populate("createdBy", "username lastActive");
 
     // Notify target user
     const io = getIo();
@@ -601,8 +601,8 @@ export const updateRoom = async (req, res) => {
       { $set: updates },
       { new: true }
     )
-      .populate("members", "username isGuest isDeleted blockedUsers profilePic")
-      .populate("createdBy", "username");
+      .populate("members", "username isGuest isDeleted blockedUsers profilePic lastActive")
+      .populate("createdBy", "username lastActive");
 
     // Notify room members
     const io = getIo();

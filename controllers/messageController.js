@@ -6,6 +6,41 @@ import { getIo } from "../socket/index.js";
 import { deleteFile } from "./fileController.js";
 
 const MAX_MESSAGE_LENGTH = parseInt(process.env.MAX_MESSAGE_LENGTH) || 5000;
+const SEARCH_LIMIT = 20;
+const CONTEXT_WINDOW = 12;
+
+const getRoomAccessQuery = (room, userId, cursor = null) => {
+  const baseQuery = { roomId: room._id };
+  if (cursor) {
+    baseQuery.createdAt = { $lt: new Date(cursor) };
+  }
+
+  const query = { $and: [baseQuery] };
+
+  const userLedgers =
+    room.accessLedger?.filter((ledger) => ledger.userId.toString() === userId.toString()) || [];
+
+  if (userLedgers.length > 0) {
+    const allowedPeriods = userLedgers.map((ledger) => {
+      const periodQuery = { createdAt: { $gte: ledger.joinedAt } };
+      if (ledger.leftAt) {
+        periodQuery.createdAt.$lte = ledger.leftAt;
+      }
+      return periodQuery;
+    });
+
+    if (allowedPeriods.length > 0) {
+      query.$and.push({ $or: allowedPeriods });
+    }
+  }
+
+  return query;
+};
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const ensureRoomMembership = (room, userId) =>
+  room.members.some((memberId) => memberId.toString() === userId.toString());
 
 /**
  * GET /api/messages/:roomId?limit=50&cursor=timestamp
@@ -29,31 +64,7 @@ export const getMessages = async (req, res) => {
       return res.status(403).json({ error: "Not a member of this room" });
     }
 
-    // Build base query
-    const baseQuery = { roomId };
-    if (cursor) {
-      baseQuery.createdAt = { $lt: new Date(cursor) };
-    }
-
-    const query = { $and: [baseQuery] };
-
-    // Apply Access Ledger restricting
-    const userLedgers = room.accessLedger?.filter(
-      (l) => l.userId.toString() === req.userId.toString()
-    ) || [];
-
-    if (userLedgers.length > 0) {
-      const allowedPeriods = userLedgers.map(ledger => {
-        const periodQuery = { createdAt: { $gte: ledger.joinedAt } };
-        if (ledger.leftAt) {
-          periodQuery.createdAt.$lte = ledger.leftAt;
-        }
-        return periodQuery;
-      });
-      if (allowedPeriods.length > 0) {
-        query.$and.push({ $or: allowedPeriods });
-      }
-    }
+    const query = getRoomAccessQuery(room, req.userId, cursor);
 
     const messages = await Message.find(query)
       .sort({ createdAt: -1 })
@@ -82,6 +93,140 @@ export const getMessages = async (req, res) => {
   } catch (error) {
     console.error("Get messages error:", error);
     res.status(500).json({ error: "Failed to get messages" });
+  }
+};
+
+/**
+ * GET /api/messages/:roomId/search?q=term&cursor=timestamp
+ * Search text messages within a room.
+ */
+export const searchMessages = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const rawQuery = sanitize((req.query.q || "").trim());
+    const limit = Math.min(parseInt(req.query.limit, 10) || SEARCH_LIMIT, 50);
+    const cursor = req.query.cursor;
+
+    if (rawQuery.length < 1) {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    if (!ensureRoomMembership(room, req.userId)) {
+      return res.status(403).json({ error: "Not a member of this room" });
+    }
+
+    const escapedQuery = escapeRegex(rawQuery);
+    const searchRegex = new RegExp(escapedQuery, "i");
+    const query = getRoomAccessQuery(room, req.userId, cursor);
+    const searchFilter = {
+      type: "text",
+      isDeleted: { $ne: true },
+      content: searchRegex,
+    };
+    query.$and.push(searchFilter);
+    const totalQuery = getRoomAccessQuery(room, req.userId);
+    totalQuery.$and.push(searchFilter);
+
+    const [results, total] = await Promise.all([
+      Message.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(limit)
+        .populate("senderId", "username isDeleted isGuest")
+        .lean(),
+      Message.countDocuments(totalQuery),
+    ]);
+
+    const processedResults = results.map((msg) => {
+      if (msg.senderId && msg.senderId.isDeleted) {
+        msg.senderId.username = "Deleted User";
+      }
+      return msg;
+    });
+
+    res.json({
+      results: processedResults,
+      total,
+      hasMore: results.length === limit,
+      cursor: results.length > 0 ? results[results.length - 1].createdAt : null,
+      query: rawQuery,
+    });
+  } catch (error) {
+    console.error("Search messages error:", error);
+    res.status(500).json({ error: "Failed to search messages" });
+  }
+};
+
+/**
+ * GET /api/messages/:roomId/context/:messageId
+ * Load a small context window around a searched message.
+ */
+export const getMessageContext = async (req, res) => {
+  try {
+    const { roomId, messageId } = req.params;
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    if (!ensureRoomMembership(room, req.userId)) {
+      return res.status(403).json({ error: "Not a member of this room" });
+    }
+
+    const targetQuery = getRoomAccessQuery(room, req.userId);
+    targetQuery.$and.push({ _id: messageId });
+
+    const targetMessage = await Message.findOne(targetQuery)
+      .populate("senderId", "username isDeleted isGuest")
+      .lean();
+
+    if (!targetMessage) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    const baseAccessQuery = getRoomAccessQuery(room, req.userId);
+    const beforeQuery = {
+      $and: [...baseAccessQuery.$and, { createdAt: { $lt: targetMessage.createdAt } }],
+    };
+    const afterQuery = {
+      $and: [...baseAccessQuery.$and, { createdAt: { $gt: targetMessage.createdAt } }],
+    };
+
+    const [before, after, olderCount] = await Promise.all([
+      Message.find(beforeQuery)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(CONTEXT_WINDOW)
+        .populate("senderId", "username isDeleted isGuest")
+        .lean(),
+      Message.find(afterQuery)
+        .sort({ createdAt: 1, _id: 1 })
+        .limit(CONTEXT_WINDOW)
+        .populate("senderId", "username isDeleted isGuest")
+        .lean(),
+      Message.countDocuments(beforeQuery),
+    ]);
+
+    const messages = [...before.reverse(), targetMessage, ...after].map((msg) => {
+      if (msg.senderId && msg.senderId.isDeleted) {
+        msg.senderId.username = "Deleted User";
+      }
+      return msg;
+    });
+
+    res.json({
+      messages,
+      targetMessageId: targetMessage._id,
+      hasMoreBefore: olderCount > before.length,
+      cursor: messages.length > 0 ? messages[0].createdAt : null,
+    });
+  } catch (error) {
+    console.error("Get message context error:", error);
+    res.status(500).json({ error: "Failed to load message context" });
   }
 };
 

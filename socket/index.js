@@ -56,6 +56,7 @@ const initSocket = (io) => {
   io.on("connection", (socket) => {
     const userId = socket.userId;
     const username = socket.username;
+    const hadExistingSockets = onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
 
     // Track online user
     if (!onlineUsers.has(userId)) {
@@ -65,8 +66,14 @@ const initSocket = (io) => {
 
     console.log(`🟢 User connected: ${username} (${userId})`);
 
-    // Broadcast online status
-    io.emit("user_online", { userId, username });
+    socket.emit("presence_snapshot", {
+      userIds: Array.from(onlineUsers.keys()),
+    });
+
+    // Broadcast online status only when the user's first socket connects.
+    if (!hadExistingSockets) {
+      io.emit("user_online", { userId, username });
+    }
 
     // ========================
     // JOIN ROOM
@@ -275,7 +282,7 @@ const initSocket = (io) => {
     // ========================
     // DISCONNECT
     // ========================
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
       const userSockets = onlineUsers.get(userId);
 
       if (userSockets) {
@@ -284,8 +291,18 @@ const initSocket = (io) => {
         if (userSockets.size === 0) {
           onlineUsers.delete(userId);
           messageTimestamps.delete(userId);
+          const lastActive = new Date();
+          await User.findByIdAndUpdate(userId, {
+            $set: { lastActive },
+          }).catch((error) => {
+            console.error("Failed to update lastActive on disconnect:", error);
+          });
           // Broadcast offline status
-          io.emit("user_offline", { userId, username });
+          io.emit("user_offline", {
+            userId,
+            username,
+            lastActive: lastActive.toISOString(),
+          });
         }
       }
 
