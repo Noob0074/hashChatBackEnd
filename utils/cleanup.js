@@ -56,13 +56,20 @@ const cleanupExpiredMedia = async () => {
  */
 const cleanupOldAccounts = async () => {
   try {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const inactiveGuestRetentionDays =
+      parseInt(process.env.INACTIVE_GUEST_RETENTION_DAYS) || 30;
+    const inactiveGuestCutoff = new Date(
+      Date.now() - inactiveGuestRetentionDays * 24 * 60 * 60 * 1000
+    );
     const deletedGuestRetentionDays = parseInt(process.env.DELETED_GUEST_RETENTION_DAYS) || 30;
     const deletedGuestCutoff = new Date(
       Date.now() - deletedGuestRetentionDays * 24 * 60 * 60 * 1000
     );
+    const oldDeletedUsersCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    console.log(`Running account cleanup (threshold: ${thirtyDaysAgo.toISOString()})...`);
+    console.log(
+      `Running account cleanup (inactive guests: ${inactiveGuestRetentionDays} days, deleted guest scrub: ${deletedGuestRetentionDays} days)...`
+    );
 
     const scrubbedGuests = await User.updateMany(
       {
@@ -91,13 +98,13 @@ const cleanupOldAccounts = async () => {
     const inactiveGuests = await User.find({
       isGuest: true,
       isDeleted: false,
-      lastActive: { $lt: thirtyDaysAgo },
+      lastActive: { $lt: inactiveGuestCutoff },
     });
 
     const oldDeletedUsers = await User.find({
       isDeleted: true,
       isGuest: false,
-      updatedAt: { $lt: thirtyDaysAgo },
+      updatedAt: { $lt: oldDeletedUsersCutoff },
     });
 
     const targetUsers = [...inactiveGuests, ...oldDeletedUsers];
